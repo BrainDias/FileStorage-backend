@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Файл-аплоадер</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            text-align: center;
+        }
+        input[type="file"] {
+            margin: 20px 0;
+        }
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+        #link {
+            margin-top: 10px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+<h2>Загрузка файла</h2>
+<form id="uploadForm">
+    <input type="text" id="username" placeholder="Логин" required>
+    <br>
+    <input type="password" id="password" placeholder="Пароль" required>
+    <br>
+    <input type="file" name="file" required>
+    <br>
+    <button type="submit">Загрузить</button>
+</form>
+<div id="status"></div>
+<div id="link"></div>
+
+<script>
+    const form = document.getElementById('uploadForm');
+    const statusDiv = document.getElementById('status');
+    const linkDiv = document.getElementById('link');
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        statusDiv.textContent = 'Загрузка...';
+        linkDiv.textContent = '';
+
+        const fileInput = form.querySelector('input[type="file"]');
+        const formData = new FormData();
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+
+        formData.append('file', fileInput.files[0]);
+
+        try {
+            const response = await fetch('http://localhost:8080/files/upload', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'Authorization': 'Basic ' + btoa(`${username}:${password}`)
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error('Ошибка загрузки');
+            }
+
+            const downloadLink = "http://localhost:8080" + await response.text();
+            statusDiv.textContent = 'Файл загружен!';
+            linkDiv.innerHTML = `<a href="${downloadLink}" target="_blank">${downloadLink}</a>`;
+        } catch (err) {
+            statusDiv.textContent = 'Ошибка: ' + err.message;
+        }
+    });
+</script>
+</body>
+</html>

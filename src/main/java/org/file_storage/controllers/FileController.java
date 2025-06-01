@@ -13,10 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +23,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequestMapping("/files")
 public class FileController {
     private final Map<String, FileEntry> fileStorage = new ConcurrentHashMap<>();
+    //отображает id файла на id одноразовой ссылки на его скачивание
+    private final Map<String, String> downloadLinks = new ConcurrentHashMap<>();
     private final Path uploadDir = Files.createTempDirectory("file-storage-");
 
     public FileController() throws IOException {
@@ -33,23 +32,55 @@ public class FileController {
 
     @PostMapping("/upload")
     public String upload(@RequestParam("file") MultipartFile file) throws IOException {
-        String id = UUID.randomUUID().toString();
-        Path target = uploadDir.resolve(id + "_" + file.getOriginalFilename());
+        String fileId = UUID.randomUUID().toString();
+        Path target = uploadDir.resolve(fileId + "_" + file.getOriginalFilename());
         file.transferTo(target);
 
-        fileStorage.put(id, new FileEntry(
+        fileStorage.put(fileId, new FileEntry(
                 target,
+                //ссылка на скачивание будет действовать 10 минут
                 Instant.now().plus(Duration.ofMinutes(10)),
                 new AtomicReference<>(Instant.now()),
                 new AtomicInteger(0)
         ));
-        return "/files/download/" + id;
+
+        String downloadId = UUID.randomUUID().toString();
+        downloadLinks.put(downloadId, fileId);
+
+        return "/files/download/" + downloadId;
     }
 
-    @GetMapping("/download/{id}")
-    public ResponseEntity<Resource> download(@PathVariable String id) throws IOException {
-        FileEntry entry = fileStorage.get(id);
+    //возвращает новую одноразовую ссылку на скачивание уже загруженного файла с известным именем
+    @GetMapping("/link/{filename}")
+    public ResponseEntity<String> generateDownloadLink(@PathVariable String filename) {
+        Optional<Map.Entry<String, FileEntry>> match = fileStorage.entrySet().stream()
+                .filter(e -> e.getValue().path().getFileName().toString().endsWith("_" + filename))
+                .findFirst();
+
+        if (match.isEmpty() || Instant.now().isAfter(match.get().getValue().expiry())) {
+            return ResponseEntity.notFound().build();
+        }
+
+        String fileId = match.get().getKey();
+        String downloadId = UUID.randomUUID().toString();
+        downloadLinks.put(downloadId, fileId);
+
+        return ResponseEntity.ok("/files/download/" + downloadId);
+    }
+
+
+
+    @GetMapping("/download/{downloadId}")
+    public ResponseEntity<Resource> download(@PathVariable String downloadId) throws IOException {
+        //находим id файла по одноразовому id скачивания и удаляем этот id скачивания
+        String fileId = downloadLinks.remove(downloadId);
+        if (fileId == null) return ResponseEntity.notFound().build();
+
+
+        FileEntry entry = fileStorage.get(fileId);
         if (entry == null || Instant.now().isAfter(entry.expiry())) {
+            //время действия ссылки на файл прошло, удаляем ее
+            fileStorage.remove(fileId);
             return ResponseEntity.notFound().build();
         }
         entry.lastAccess().set(Instant.now());
@@ -74,20 +105,6 @@ public class FileController {
             map.put("downloads", fe.downloadCount().get());
             return map;
         }).toList();
-    }
-
-    @Scheduled(fixedDelay = 60_000)
-    public void cleanup() {
-        Instant now = Instant.now();
-        fileStorage.entrySet().removeIf(entry -> {
-            if (now.isAfter(entry.getValue().expiry())) {
-                try {
-                    Files.deleteIfExists(entry.getValue().path());
-                } catch (IOException ignored) {}
-                return true;
-            }
-            return false;
-        });
     }
 
     @Scheduled(timeUnit = TimeUnit.DAYS, fixedDelay = 30)
